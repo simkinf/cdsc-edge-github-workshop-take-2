@@ -88,7 +88,7 @@ linelist <- linelist %>%
 linelist <- linelist %>%
   mutate(
     any_symptom = sick_std | diarrhoea,
-    case = any_symptom & !is.na(hours_since_party) & hours_since_party >= 0 & hours_since_party <= 24
+    case = any_symptom & !is.na(hours_since_party) & hours_since_party >= 0 & hours_since_party <= 48
   )
 
 # ---- Summary statistics ----
