@@ -1,0 +1,134 @@
+---
+title: "CDSC New Year's Party Outbreak: Epidemiological Report (tidy dplyr)"
+author: "Public Health Wales"
+date: "2026-01-08"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: readable
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+# Executive Summary
+This report describes a synthetic foodborne outbreak associated with the CDSC New Year's party, with exposure assumed at **2026-01-01 20:00 UTC**. The line list intentionally contains realistic data-quality issues (e.g., inconsistent encodings, duplicated/missing IDs, implausible years) to demonstrate practical outbreak analytics.
+
+Key indicators are computed using tidy `dplyr` workflows without custom functions. The case definition used here is: **≥1 symptom** (sick or GI-related) **AND** symptom onset **0–144 hours** after the party.
+
+# Methods
+- **Data source**: `cdsc_new_year_outbreak_linelist.csv` (synthetic; workshop dataset).
+- **Cleaning**: Normalise gender and boolean fields, parse onset datetimes, fix implausible onset years to 2026, calculate hours-since-exposure, create flags (ID, age, onset-before-exposure).
+- **Case definition**: At least one of: `sick`, `diarrhoea` (from `diorpha`), `abdominal_pain`, `headache`, or `fatigue`, **and** onset between 0 and 144 hours post party.
+
+# Load & Clean (tidy dplyr)
+
+```{r}
+suppressPackageStartupMessages({
+  library(readr)
+  library(dplyr)
+  library(tidyr)
+  library(stringr)
+  library(lubridate)
+  library(ggplot2)
+})
+
+# Source the simplified tidy workflow
+a <- source("clean_analyze_outbreak_dplyr.R")
+
+# Show high-level summary
+summary_stats_simple
+table(linelist$gender_std, useNA = "ifany")
+```
+
+# Demographics
+
+## Age–Sex Pyramid
+
+```{r, fig.width=9, fig.height=6}
+# Build 10-year age bands and plot a mirrored pyramid
+age_pyramid_df <- linelist %>%
+  filter(!is.na(age), !is.na(gender_std)) %>%
+  mutate(age_band = cut(age, breaks = seq(0, 100, by = 10), right = FALSE, include.lowest = TRUE)) %>%
+  group_by(age_band, gender_std) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  mutate(n_signed = if_else(gender_std == "Male", -n, n))
+
+pyramid <- ggplot(age_pyramid_df, aes(x = age_band, y = n_signed, fill = gender_std)) +
+  geom_col(width = 0.9) +
+  coord_flip() +
+  scale_y_continuous(labels = function(x) abs(x)) +
+  scale_fill_manual(values = c("Male" = "#1f78b4", "Female" = "#e31a1c", "Other" = "#6a3d9a")) +
+  labs(title = "Age–Sex Pyramid", x = "Age band (years)", y = "Count", fill = "Gender") +
+  theme_minimal()
+
+pyramid
+```
+
+# Epidemiology
+
+## Epidemic Curve (onset after exposure)
+
+```{r, fig.width=9, fig.height=5}
+# Histogram of hours since party for cases, binned by 6-hour intervals
+linelist %>%
+  filter(case, !is.na(hours_since_party), hours_since_party >= 0, hours_since_party <= 144) %>%
+  ggplot(aes(x = hours_since_party)) +
+  geom_histogram(binwidth = 6, fill = "#2c7fb8", color = "white") +
+  labs(title = "Epidemic curve: Hours since party (cases)",
+       x = "Hours since party (hours)", y = "Frequency") +
+  theme_minimal()
+```
+
+## Number of People Eating Each Meal
+
+```{r, fig.width=9, fig.height=5}
+# Count how many attendees consumed each meal item
+meal_std_cols <- paste0(meal_items, "_std")
+meal_counts <- linelist %>%
+  select(all_of(meal_std_cols)) %>%
+  pivot_longer(cols = everything(), names_to = "meal", values_to = "exposed") %>%
+  mutate(meal = str_replace(meal, "_std$", ""),
+         meal = str_replace_all(meal, "_", " ") %>% str_to_title()) %>%
+  filter(exposed == TRUE) %>%
+  count(meal, name = "n_eating") %>%
+  arrange(desc(n_eating))
+
+meal_counts
+
+# Bar chart of meal consumption
+meal_counts %>%
+  ggplot(aes(x = reorder(meal, n_eating), y = n_eating)) +
+  geom_col(fill = "#33a02c") +
+  coord_flip() +
+  labs(title = "Number of People Eating Each Meal", x = "Meal item", y = "Count") +
+  theme_minimal()
+```
+
+# Exposure Association (Odds Ratios)
+
+```{r}
+# Read the tidy OR table produced by the script and display
+or_table <- readr::read_csv("meal_odds_ratios_dplyr.csv", show_col_types = FALSE) %>%
+  mutate(meal = str_replace_all(meal, "_", " ") %>% str_to_title())
+
+knitr::kable(or_table, digits = 3, caption = "Odds ratios for illness by meal item (Fisher's exact test, 95% CI)")
+```
+
+# Data Quality
+
+```{r}
+DQ <- tibble(
+  Metric = c("Records", "Cases", "Attack rate", "ID issues", "Age issues", "Onset before party"),
+  Value = c(summary_stats_simple$Records, summary_stats_simple$Cases, summary_stats_simple$Attack_rate,
+            summary_stats_simple$ID_issues, summary_stats_simple$Age_issues, summary_stats_simple$Onset_before_party)
+)
+DQ
+```
+
+# Notes & Interpretation
+- The dataset is **synthetic** and created for training; results are illustrative.
+- Given the simulated risk parameters, seafood (e.g., prawn cocktail) may show stronger association with illness.
+- Consider sensitivity analyses: alternate case definitions, narrower onset window, or stratified analyses by age/sex.
